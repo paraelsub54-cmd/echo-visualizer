@@ -1,0 +1,735 @@
+```html
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Echo Visualizer</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #050505;
+    font-family: Arial, sans-serif;
+}
+
+canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#start {
+    position: fixed;
+    z-index: 10;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+
+    padding: 18px 30px;
+    border: 1px solid rgba(255,255,255,.35);
+    border-radius: 50px;
+
+    background: rgba(10,10,10,.75);
+    color: white;
+
+    font-size: 17px;
+    letter-spacing: 2px;
+
+    backdrop-filter: blur(10px);
+}
+
+#status {
+    position: fixed;
+    z-index: 5;
+    left: 50%;
+    bottom: 25px;
+    transform: translateX(-50%);
+
+    color: rgba(255,255,255,.5);
+    font-size: 11px;
+    letter-spacing: 3px;
+
+    pointer-events: none;
+}
+
+#title {
+    position: fixed;
+    z-index: 5;
+    top: 25px;
+    left: 50%;
+    transform: translateX(-50%);
+
+    color: rgba(255,255,255,.7);
+    font-size: 10px;
+    letter-spacing: 6px;
+
+    pointer-events: none;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="visualizer"></canvas>
+
+<button id="start">ACTIVAR MICRÓFONO</button>
+
+<div id="title">ECHO VISUALIZER</div>
+<div id="status">ESPERANDO AUDIO</div>
+
+<script>
+
+const canvas = document.getElementById("visualizer");
+const ctx = canvas.getContext("2d");
+
+const button = document.getElementById("start");
+const status = document.getElementById("status");
+
+let audioContext;
+let analyser;
+let microphone;
+let dataArray;
+
+let running = false;
+
+let smoothBass = 0;
+let smoothMid = 0;
+let smoothHigh = 0;
+let smoothVolume = 0;
+
+let particles = [];
+
+function resize() {
+    canvas.width = window.innerWidth * devicePixelRatio;
+    canvas.height = window.innerHeight * devicePixelRatio;
+
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+
+    ctx.setTransform(
+        devicePixelRatio,
+        0,
+        0,
+        devicePixelRatio,
+        0,
+        0
+    );
+}
+
+window.addEventListener("resize", resize);
+resize();
+
+
+/* =========================
+   ACTIVAR MICRO
+========================= */
+
+async function startMicrophone() {
+
+    try {
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+            }
+        });
+
+        audioContext = new (
+            window.AudioContext ||
+            window.webkitAudioContext
+        )();
+
+        microphone = audioContext.createMediaStreamSource(stream);
+
+        analyser = audioContext.createAnalyser();
+
+        /*
+        FFT alto = más detalle
+        */
+
+        analyser.fftSize = 2048;
+
+        /*
+        MÁS sensibilidad temporal
+        */
+
+        analyser.smoothingTimeConstant = 0.72;
+
+        microphone.connect(analyser);
+
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        running = true;
+
+        button.style.display = "none";
+
+        status.textContent = "MICRÓFONO ACTIVO";
+
+        createParticles();
+
+        animate();
+
+    } catch (error) {
+
+        console.log(error);
+
+        status.textContent = "NO SE PUDO ACTIVAR EL MICRÓFONO";
+
+        button.textContent = "INTENTAR DE NUEVO";
+
+    }
+}
+
+button.addEventListener("click", startMicrophone);
+
+
+/* =========================
+   PARTICULAS
+========================= */
+
+function createParticles() {
+
+    particles = [];
+
+    for (let i = 0; i < 90; i++) {
+
+        particles.push({
+
+            angle: Math.random() * Math.PI * 2,
+
+            radius:
+                Math.min(innerWidth, innerHeight) *
+                (0.12 + Math.random() * 0.30),
+
+            size:
+                0.5 + Math.random() * 2,
+
+            speed:
+                0.0005 + Math.random() * 0.002,
+
+            phase:
+                Math.random() * Math.PI * 2
+
+        });
+
+    }
+}
+
+
+/* =========================
+   OBTENER FRECUENCIAS
+========================= */
+
+function getFrequency(start, end) {
+
+    let total = 0;
+    let count = 0;
+
+    for (let i = start; i < end; i++) {
+
+        total += dataArray[i];
+        count++;
+
+    }
+
+    return count ? total / count : 0;
+}
+
+
+/* =========================
+   ANIMACIÓN
+========================= */
+
+function animate() {
+
+    if (!running) return;
+
+    requestAnimationFrame(animate);
+
+    analyser.getByteFrequencyData(dataArray);
+
+    /*
+    Separación aproximada:
+    graves
+    medios
+    agudos
+    */
+
+    const bass = getFrequency(1, 18);
+    const mid = getFrequency(18, 100);
+    const high = getFrequency(100, 280);
+
+    const volume = getFrequency(1, 300);
+
+    /*
+    Suavizado
+    */
+
+    smoothBass += (bass - smoothBass) * 0.16;
+    smoothMid += (mid - smoothMid) * 0.20;
+    smoothHigh += (high - smoothHigh) * 0.23;
+    smoothVolume += (volume - smoothVolume) * 0.18;
+
+    /*
+    GANANCIA EXTRA
+
+    Esto hace que el movimiento sea
+    MUCHO más visible.
+    */
+
+    const B = Math.min(255, smoothBass * 2.7);
+    const M = Math.min(255, smoothMid * 2.2);
+    const H = Math.min(255, smoothHigh * 2.0);
+    const V = Math.min(255, smoothVolume * 2.4);
+
+    drawBackground(B, M, V);
+
+    drawParticles(B, M, H);
+
+    drawVisualizer(B, M, H, V);
+}
+
+
+/* =========================
+   FONDO
+========================= */
+
+function drawBackground(B, M, V) {
+
+    const w = innerWidth;
+    const h = innerHeight;
+
+    const cx = w / 2;
+    const cy = h / 2;
+
+    ctx.fillStyle = "rgba(3,3,5,0.25)";
+    ctx.fillRect(0,0,w,h);
+
+    /*
+    Aura central
+    */
+
+    const pulse =
+        0.35 +
+        (B / 255) * 1.1 +
+        Math.sin(Date.now() * 0.002) * 0.08;
+
+    const gradient = ctx.createRadialGradient(
+        cx,
+        cy,
+        0,
+        cx,
+        cy,
+        Math.max(w,h) * 0.55
+    );
+
+    gradient.addColorStop(
+        0,
+        `rgba(130,70,255,${0.10 * pulse})`
+    );
+
+    gradient.addColorStop(
+        0.35,
+        `rgba(40,90,255,${0.05 * pulse})`
+    );
+
+    gradient.addColorStop(
+        1,
+        "rgba(0,0,0,0)"
+    );
+
+    ctx.fillStyle = gradient;
+
+    ctx.fillRect(0,0,w,h);
+}
+
+
+/* =========================
+   PARTICULAS
+========================= */
+
+function drawParticles(B, M, H) {
+
+    const w = innerWidth;
+    const h = innerHeight;
+
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const energy =
+        (B + M + H) / 765;
+
+    particles.forEach(p => {
+
+        p.angle += p.speed * (1 + energy * 8);
+
+        const radius =
+            p.radius *
+            (1 + energy * 1.4);
+
+        const x =
+            cx +
+            Math.cos(p.angle) * radius;
+
+        const y =
+            cy +
+            Math.sin(p.angle) * radius;
+
+        const alpha =
+            0.15 +
+            energy * 0.8;
+
+        ctx.beginPath();
+
+        ctx.arc(
+            x,
+            y,
+            p.size * (1 + energy * 3),
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fillStyle =
+            `rgba(180,180,255,${alpha})`;
+
+        ctx.fill();
+
+    });
+}
+
+
+/* =========================
+   VISUALIZER PRINCIPAL
+========================= */
+
+function drawVisualizer(B, M, H, V) {
+
+    const w = innerWidth;
+    const h = innerHeight;
+
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const baseRadius =
+        Math.min(w,h) * 0.18;
+
+    /*
+    PULSO GENERAL
+    */
+
+    const pulse =
+        1 +
+        (B / 255) * 0.75 +
+        (V / 255) * 0.30;
+
+    /*
+    CIRCULO EXTERIOR
+    */
+
+    ctx.beginPath();
+
+    const points = 180;
+
+    for (let i = 0; i <= points; i++) {
+
+        const angle =
+            (Math.PI * 2 * i) / points;
+
+        const frequencyIndex =
+            Math.floor(
+                (i / points) *
+                (dataArray.length * 0.45)
+            );
+
+        const value =
+            dataArray[frequencyIndex] || 0;
+
+        /*
+        GANANCIA EXPRESIVA
+        */
+
+        const movement =
+            Math.pow(value / 255, 1.35) *
+            Math.min(w,h) *
+            0.32;
+
+        const wave =
+            Math.sin(
+                angle * 7 +
+                Date.now() * 0.002
+            ) *
+            V *
+            0.04;
+
+        const radius =
+            baseRadius * pulse +
+            movement +
+            wave;
+
+        const x =
+            cx +
+            Math.cos(angle) * radius;
+
+        const y =
+            cy +
+            Math.sin(angle) * radius;
+
+        if (i === 0)
+            ctx.moveTo(x,y);
+        else
+            ctx.lineTo(x,y);
+    }
+
+    ctx.closePath();
+
+    /*
+    GLOW
+    */
+
+    ctx.shadowBlur =
+        20 +
+        B * 0.35;
+
+    ctx.shadowColor =
+        `rgba(120,100,255,${0.35 + V/500})`;
+
+    ctx.strokeStyle =
+        `rgba(180,180,255,${0.35 + V/350})`;
+
+    ctx.lineWidth =
+        1.5 +
+        V / 80;
+
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+
+
+    /*
+    SEGUNDO ANILLO
+    */
+
+    ctx.beginPath();
+
+    for (let i = 0; i <= points; i++) {
+
+        const angle =
+            (Math.PI * 2 * i) / points;
+
+        const frequencyIndex =
+            Math.floor(
+                (i / points) *
+                (dataArray.length * 0.25)
+            );
+
+        const value =
+            dataArray[frequencyIndex] || 0;
+
+        const movement =
+            Math.pow(value / 255, 1.2) *
+            Math.min(w,h) *
+            0.20;
+
+        const radius =
+            baseRadius * 1.45 +
+            movement;
+
+        const x =
+            cx +
+            Math.cos(angle) * radius;
+
+        const y =
+            cy +
+            Math.sin(angle) * radius;
+
+        if (i === 0)
+            ctx.moveTo(x,y);
+        else
+            ctx.lineTo(x,y);
+    }
+
+    ctx.closePath();
+
+    ctx.strokeStyle =
+        `rgba(255,255,255,${0.12 + B/800})`;
+
+    ctx.lineWidth = 1;
+
+    ctx.stroke();
+
+
+    /*
+    CENTRO
+    */
+
+    const coreRadius =
+        baseRadius *
+        (0.48 + B / 700);
+
+    const core =
+        ctx.createRadialGradient(
+            cx,
+            cy,
+            0,
+            cx,
+            cy,
+            coreRadius
+        );
+
+    core.addColorStop(
+        0,
+        `rgba(255,255,255,${0.18 + V/500})`
+    );
+
+    core.addColorStop(
+        0.35,
+        `rgba(130,100,255,${0.10 + B/600})`
+    );
+
+    core.addColorStop(
+        1,
+        "rgba(0,0,0,0)"
+    );
+
+    ctx.fillStyle = core;
+
+    ctx.beginPath();
+
+    ctx.arc(
+        cx,
+        cy,
+        coreRadius,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.fill();
+
+
+    /*
+    LÍNEAS DE FRECUENCIA
+    */
+
+    const bars = 64;
+
+    for (let i = 0; i < bars; i++) {
+
+        const angle =
+            (Math.PI * 2 * i) / bars;
+
+        const index =
+            Math.floor(
+                (i / bars) *
+                (dataArray.length * 0.55)
+            );
+
+        const value =
+            dataArray[index] || 0;
+
+        /*
+        Multiplicador grande
+        */
+
+        const length =
+            15 +
+            Math.pow(value / 255, 1.15) *
+            Math.min(w,h) *
+            0.27;
+
+        const inner =
+            baseRadius * 1.65;
+
+        const outer =
+            inner + length;
+
+        const x1 =
+            cx + Math.cos(angle) * inner;
+
+        const y1 =
+            cy + Math.sin(angle) * inner;
+
+        const x2 =
+            cx + Math.cos(angle) * outer;
+
+        const y2 =
+            cy + Math.sin(angle) * outer;
+
+        ctx.beginPath();
+
+        ctx.moveTo(x1,y1);
+
+        ctx.lineTo(x2,y2);
+
+        ctx.strokeStyle =
+            `rgba(255,255,255,${0.18 + value/500})`;
+
+        ctx.lineWidth =
+            1.5 +
+            value / 90;
+
+        ctx.stroke();
+    }
+
+
+    /*
+    PULSO EXTERIOR DE GRAVES
+    */
+
+    const bassPulse =
+        baseRadius *
+        (1.8 + B / 100);
+
+    ctx.beginPath();
+
+    ctx.arc(
+        cx,
+        cy,
+        bassPulse,
+        0,
+        Math.PI * 2
+    );
+
+    ctx.strokeStyle =
+        `rgba(100,100,255,${0.05 + B/900})`;
+
+    ctx.lineWidth =
+        2 +
+        B / 100;
+
+    ctx.stroke();
+}
+
+
+/* =========================
+   AUTO FULLSCREEN
+========================= */
+
+document.addEventListener(
+    "dblclick",
+    () => {
+
+        if (
+            document.documentElement.requestFullscreen
+        ) {
+            document.documentElement.requestFullscreen();
+        }
+
+    }
+);
+
+</script>
+
+</body>
+</html>
+```
