@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Echo Dream Visualizer</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#030309}
+  canvas{display:block;width:100%;height:100%}
+  #status{
+    position:fixed;left:50%;bottom:5%;transform:translateX(-50%);
+    color:rgba(255,255,255,.62);font:12px system-ui,sans-serif;
+    letter-spacing:.18em;text-transform:uppercase;text-align:center;
+    text-shadow:0 0 14px #000;pointer-events:none;transition:opacity 1s
+  }
+  #start{
+    position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at center,#171326 0%,#05050b 65%,#020207 100%);
+    color:#fff;font:14px system-ui,sans-serif;letter-spacing:.14em;text-transform:uppercase;
+    cursor:pointer
+  }
+  #start span{padding:14px 20px;border:1px solid rgba(255,255,255,.28);
+    border-radius:999px;background:rgba(255,255,255,.06);backdrop-filter:blur(8px)}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="status">Tap to enable microphone</div>
+<div id="start"><span>Enable microphone</span></div>
+
+<script>
+const canvas=document.getElementById('c'), ctx=canvas.getContext('2d');
+const start=document.getElementById('start'), status=document.getElementById('status');
+let W,H,DPR, analyser, data, audioCtx, stream, running=false;
+let particles=[], t=0, smoothBass=0, smoothMid=0, smoothTreble=0, smoothLevel=0;
+
+function resize(){
+  DPR=Math.min(devicePixelRatio||1,2);
+  W=innerWidth; H=innerHeight;
+  canvas.width=W*DPR; canvas.height=H*DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  particles=Array.from({length:Math.max(45,Math.floor(W*H/9000))},()=>({
+    x:Math.random()*W,y:Math.random()*H,
+    vx:(Math.random()-.5)*.12,vy:(Math.random()-.5)*.12,
+    r:.5+Math.random()*1.7,a:.12+Math.random()*.45,
+    phase:Math.random()*Math.PI*2
+  }));
+}
+addEventListener('resize',resize); resize();
+
+function avg(lo,hi){
+  let s=0,n=0;
+  for(let i=lo;i<hi&&i<data.length;i++){s+=data[i];n++}
+  return n?s/n/255:0;
+}
+function draw(){
+  if(!running)return;
+  requestAnimationFrame(draw); t+=.008;
+
+  analyser.getByteFrequencyData(data);
+  const bass=avg(1,Math.max(3,Math.floor(data.length*.08)));
+  const mid=avg(Math.floor(data.length*.08),Math.floor(data.length*.35));
+  const treble=avg(Math.floor(data.length*.35),Math.floor(data.length*.9));
+  const level=(bass*.55+mid*.3+treble*.15);
+
+  smoothBass += (bass-smoothBass)*.12;
+  smoothMid += (mid-smoothMid)*.10;
+  smoothTreble += (treble-smoothTreble)*.10;
+  smoothLevel += (level-smoothLevel)*.09;
+
+  ctx.fillStyle='rgba(2,2,9,.16)';
+  ctx.fillRect(0,0,W,H);
+
+  // Soft moving atmospheric glow
+  const cx=W*.5+Math.sin(t*.55)*W*.08;
+  const cy=H*.48+Math.cos(t*.42)*H*.07;
+  const pulse=1+smoothBass*.9;
+  let g=ctx.createRadialGradient(cx,cy,0,cx,cy,Math.max(W,H)*.72*pulse);
+  g.addColorStop(0,`rgba(92,65,150,${.16+.10*smoothMid})`);
+  g.addColorStop(.28,`rgba(34,75,120,${.10+.08*smoothTreble})`);
+  g.addColorStop(.65,'rgba(9,16,42,.06)');
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+
+  // Breathing orb
+  const R=Math.min(W,H)*(.16+.035*smoothBass);
+  let orb=ctx.createRadialGradient(cx,cy,0,cx,cy,R*1.8);
+  orb.addColorStop(0,`rgba(205,185,255,${.12+.16*smoothLevel})`);
+  orb.addColorStop(.25,`rgba(118,93,185,${.10+.10*smoothBass})`);
+  orb.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=orb;ctx.fillRect(cx-R*2,cy-R*2,R*4,R*4);
+
+  // Sound-reactive rings
+  ctx.save(); ctx.translate(cx,cy);
+  for(let k=0;k<5;k++){
+    const rr=R*(.7+k*.24)+smoothBass*R*(.45-k*.05);
+    ctx.beginPath();
+    for(let i=0;i<=120;i++){
+      const a=i/120*Math.PI*2;
+      const bin=Math.floor((i/120)*data.length*.55);
+      const amp=(data[bin]||0)/255;
+      const wobble=1+amp*(.025+.018*k)+Math.sin(a*3+t*2+k)*.008;
+      const x=Math.cos(a)*rr*wobble, y=Math.sin(a)*rr*wobble;
+      if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle=`rgba(180,160,235,${.08+.025*(5-k)+smoothMid*.06})`;
+    ctx.lineWidth=1;
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Floating particles reacting gently
+  for(const p of particles){
+    p.x+=p.vx+Math.sin(t+p.phase)*.025*(1+smoothMid*4);
+    p.y+=p.vy+Math.cos(t*.7+p.phase)*.025*(1+smoothTreble*4);
+    if(p.x<0)p.x=W;if(p.x>W)p.x=0;if(p.y<0)p.y=H;if(p.y>H)p.y=0;
+    const near=1+smoothLevel*2.5;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r*near,0,Math.PI*2);
+    ctx.fillStyle=`rgba(220,210,255,${p.a*(.45+smoothTreble)})`;ctx.fill();
+  }
+
+  // Subtle film/vignette
+  const vg=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*.2,W/2,H/2,Math.max(W,H)*.72);
+  vg.addColorStop(0,'rgba(0,0,0,0)');
+  vg.addColorStop(1,'rgba(0,0,0,.58)');
+  ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);
+}
+
+async function enableMic(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}
+    });
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    const source=audioCtx.createMediaStreamSource(stream);
+    analyser=audioCtx.createAnalyser();
+    analyser.fftSize=512; analyser.smoothingTimeConstant=.82;
+    data=new Uint8Array(analyser.frequencyBinCount);
+    source.connect(analyser);
+    running=true;
+    start.style.display='none';
+    status.textContent='MIC • LIVE';
+    setTimeout(()=>status.style.opacity='.18',1800);
+    draw();
+  }catch(e){
+    status.textContent='Microphone permission required';
+  }
+}
+start.addEventListener('click',enableMic);
+</script>
+</body>
+</html>
